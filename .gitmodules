@@ -1,0 +1,3 @@
+[submodule "pybacktestchain"]
+	path = pybacktestchain
+	url = https://github.com/RedaElFassi/pybacktestchain.git
