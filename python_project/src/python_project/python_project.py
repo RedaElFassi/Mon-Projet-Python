@@ -63,45 +63,70 @@ import plotly.express as px
 import numpy as np
 import pandas as pd
 
-# Calculate PnL
 def compute_pnl(df):
     """
-    Compute the PnL for each stock and the overall portfolio.
+    Compute the Profit and Loss (PnL) evolution over time for each ticker and the overall portfolio.
+    Args:
+        df (pd.DataFrame): DataFrame containing transaction data.
+    Returns:
+        pd.DataFrame: DataFrame with PnL evolution over time for the overall portfolio and stocks.
     """
-    df['PnL'] = np.where(
-        df['Action'] == 'SELL',
-        (df['Price'] - df['Average_Buy_Price']) * df['Quantity'],
-        0
+    # Calculate the average buy price for each Ticker
+    df['Average_Buy_Price'] = df.groupby('Ticker', group_keys=False)['Price'].transform(
+        lambda x: x.expanding().mean()
     )
     
-    # Aggregate PnL for each stock
-    stock_pnl = df.groupby('Ticker')['PnL'].sum().reset_index(name='Stock_PnL')
+    # Compute PnL for each transaction
+    df['Transaction_PnL'] = np.where(
+        df['Action'] == 'SELL',
+        (df['Price'] - df['Average_Buy_Price']) * df['Quantity'],
+        0  # PnL for BUY transactions is 0
+    )
     
-    # Total PnL for the portfolio
-    overall_pnl = df['PnL'].sum()
+    # Compute cumulative PnL over time
+    df['Cumulative_PnL'] = df.groupby('Date')['Transaction_PnL'].cumsum()
     
+    # Aggregate overall and per-stock PnL
+    overall_pnl = df.groupby('Date')['Cumulative_PnL'].sum().reset_index(name='Overall_PnL')
+    stock_pnl = df.groupby(['Date', 'Ticker'])['Cumulative_PnL'].sum().reset_index()
+
     return overall_pnl, stock_pnl
 
 
-# Compute Returns
+
+
 def compute_returns(df):
     """
-    Compute daily returns for the portfolio and for each stock.
+    Computes portfolio returns and stock returns.
+    Adds `Daily_Return`, `Portfolio_Value`, and `Average_Buy_Price` columns to the DataFrame.
+
+    Parameters:
+        df (pd.DataFrame): DataFrame with transaction data.
+
+    Returns:
+        tuple: portfolio_returns and stock_returns as DataFrames.
     """
-    # Calculate cumulative portfolio value (Cash + Value of Positions)
-    df['Portfolio_Value'] = df['Cash'] + df.groupby('Date')['Price'].apply(
-        lambda x: x.sum()
+    # Calculate the average buy price per ticker
+    df['Average_Buy_Price'] = df.groupby('Ticker', group_keys=False)['Price'].transform(
+        lambda x: x.expanding().mean()
     )
     
-    # Compute portfolio returns
+    # Calculate portfolio value as cash plus holdings
+    df['Stock_Value'] = df['Quantity'] * df['Price']
+    df['Portfolio_Value'] = df['Cash'] + df.groupby('Date', group_keys=False)['Stock_Value'].transform('sum')
+
+    # Calculate daily returns
     df['Daily_Return'] = df['Portfolio_Value'].pct_change().fillna(0)
-    
-    # Compute stock-specific returns
-    stock_returns = df.groupby('Ticker').apply(
-        lambda group: group['Price'].pct_change().fillna(0)
-    ).reset_index(level=0, drop=True)
-    
-    return df['Daily_Return'], stock_returns
+
+    # Extract portfolio and stock returns
+    portfolio_returns = df[['Date', 'Daily_Return']].drop_duplicates()
+    stock_returns = df[['Date', 'Ticker', 'Daily_Return']].drop_duplicates()
+
+    return portfolio_returns, stock_returns
+
+
+
+
 
 
 # Sharpe Ratio Calculation
@@ -162,15 +187,20 @@ app.layout = dbc.Container([
     Input('stock-selector', 'value')
 )
 def update_pnl_chart(selected_stocks):
+    # Filter data based on selected stocks
     filtered_df = df[df['Ticker'].isin(selected_stocks)]
     overall_pnl, _ = compute_pnl(filtered_df)
-    fig = px.bar(
-        x=['Overall PnL'],
-        y=[overall_pnl],
-        labels={'x': 'Metric', 'y': 'PnL'},
-        title="Overall Portfolio PnL"
+    
+    # Create line chart for overall PnL evolution
+    fig = px.line(
+        overall_pnl,
+        x='Date',
+        y='Overall_PnL',
+        title="Overall Portfolio PnL Over Time",
+        labels={'Overall_PnL': 'PnL', 'Date': 'Date'}
     )
     return fig
+
 
 # Callback pour le graphique du PnL par action
 @app.callback(
@@ -178,16 +208,21 @@ def update_pnl_chart(selected_stocks):
     Input('stock-selector', 'value')
 )
 def update_stock_pnl_chart(selected_stocks):
+    # Filter data based on selected stocks
     filtered_df = df[df['Ticker'].isin(selected_stocks)]
     _, stock_pnl = compute_pnl(filtered_df)
-    fig = px.bar(
+    
+    # Create line chart for stock-specific PnL evolution
+    fig = px.line(
         stock_pnl,
-        x='Ticker',
-        y='PnL',
-        title="PnL by Stock",
-        labels={'PnL': 'PnL', 'Ticker': 'Stock'}
+        x='Date',
+        y='Cumulative_PnL',
+        color='Ticker',
+        title="Stock PnL Over Time",
+        labels={'Cumulative_PnL': 'PnL', 'Date': 'Date', 'Ticker': 'Stock'}
     )
     return fig
+
 
 # Callback pour le graphique des retours
 @app.callback(
@@ -217,7 +252,8 @@ def open_browser():
 # Run the Dash app
 if __name__ == "__main__":
     Timer(1, open_browser).start()  # Open the browser after a 1-second delay
-    app.run_server(debug=True, port=8050)
+    app.run_server(debug=False, port=8050)
+
 
 
 
